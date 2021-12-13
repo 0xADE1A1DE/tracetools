@@ -1,0 +1,6 @@
+[Dolphin]
+HeaderColumnWidths=931,128,189,72,133
+Timestamp=2021,3,1,11,10,10
+Version=4
+ViewMode=2
+VisibleRoles=Details_text,Details_size,Details_modificationtime,Details_owner,Details_type,CustomizedDetails

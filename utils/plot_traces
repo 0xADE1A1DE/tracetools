@@ -1,0 +1,488 @@
+#! /usr/bin/python3
+
+# Copyright 2021 University of Adelaide
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from pyqtgraph.Qt import QtGui, QtCore, QtWidgets
+from pyqtgraph.graphicsItems import PlotDataItem, PlotItem, PlotCurveItem
+from pyqtgraph import InfiniteLine
+import trsfile as tr
+import numpy as np
+from numpy.lib import format as npf
+import pandas as pd
+import pyqtgraph as pg
+import sys
+import copy
+import os
+import BinTraces
+NVIEW_TRACES = 10
+NVIEW_RANGE = (0,0)
+DRAW_TVALS = False
+BASE_TRACE = None
+DEF_WIDTH = 800
+DEF_HEIGHT = 500
+COLUMN_FIRST = True
+OFFSETS = None
+INF_LINES= []
+INF_PEN = pg.mkPen(color='ff0000',width=1)
+PENS = []
+PEN_GREY = None
+PLOT_ABS = False
+app = QtGui.QApplication([])
+
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
+def range_diff(r):
+    return r[1] - r[0]
+class IView:
+    def open(self, filename):
+        raise NotImplementedError()
+    def get_ntraces(self):
+        raise NotImplementedError()
+    def get_nsamples(self):
+        raise NotImplementedError()
+    def view_traces(self, from_trace, to_trace, nsamples):
+        # returns n number of traces
+        raise NotImplementedError()
+    def view_data(self, from_trace, to_trace):
+        return []
+    def close(self):
+        raise NotImplementedError()
+class XrcView(IView):
+    def open(self, filename):
+        self.b = BinTraces.BinTraces(filename)
+    def get_ntraces(self):
+        return self.b.get_trace_count()
+    def get_nsamples(self):
+        return self.b.get_sample_count()
+    def view_traces(self, from_trace, to_trace, nsamples):
+        mat = self.b.read_traces(from_trace, to_trace)
+        return mat
+    def close(self):
+        pass
+
+class TrsView(IView):
+    def open(self, filename):
+        self.trs_file = tr.trs_open(filename, 'r')
+    def get_ntraces(self):
+        return self.trs_file.get_header(tr.Header.NUMBER_TRACES)
+    def get_nsamples(self):
+        return self.trs_file.get_header(tr.Header.NUMBER_SAMPLES)
+    def view_traces(self, from_trace, to_trace, nsamples):
+        tracewin = np.empty((to_trace - from_trace), dtype=np.object)
+        i=0
+        for t in self.trs_file[from_trace:to_trace]:
+            tracewin[i] = t.samples
+            i+=1
+        return tracewin
+    def view_data(self, from_trace, to_trace):
+        data = []
+        for t in self.trs_file[from_trace:to_trace]:
+            data.append(t.parameters['LEGACY_DATA'].value.hex())
+        return data
+    def close(self):
+        self.trs_file.close()
+class NpyView(IView):
+    def open(self, filename):
+        self.mat = npf.open_memmap(filename, mode='r')
+        datafilename = filename + ".data"
+        self.datafp = None
+        self.linelength = 0
+        if os.path.exists(datafilename):
+            self.datafp = open(datafilename, 'r')
+            firstline = self.datafp.readline()
+            self.linelength = len(firstline)
+            self.datafp.seek(0,0)
+    def get_ntraces(self):
+        if len(np.shape(self.mat)) == 1:
+            return 1
+        return np.shape(self.mat)[0]
+    def get_nsamples(self):
+        if len(np.shape(self.mat)) == 1:
+            return np.shape(self.mat)[0]
+        return np.shape(self.mat)[1]
+    def view_traces(self, from_trace, to_trace, nsamples):
+        if len(np.shape(self.mat)) == 1:
+            return [self.mat[:]]
+        return self.mat[from_trace:to_trace, :]
+    def view_data(self, from_trace, to_trace):
+        #print(self.dataframe[0].values[from_trace:to_trace])
+        if self.datafp is not None:
+            self.datafp.seek(self.linelength * from_trace)
+            datalines = []
+            for t in range(from_trace, to_trace):
+                datalines.append(self.datafp.readline().strip())
+            return datalines
+        else:
+            return []
+    def close(self):
+        del self.mat
+class TxtView(IView):
+    def open(self, filename):
+        self.mat = pd.read_csv(filename, header=None).to_numpy(dtype=np.float32).flatten()
+        #self.mat = np.loadtxt(filename, dtype=np.float32)
+    def get_ntraces(self):
+        if np.ndim(self.mat) == 2:
+            if COLUMN_FIRST:
+                return np.shape(self.mat)[1]
+            else:
+                return np.shape(self.mat)[0]
+        else:
+            return 1
+    def get_nsamples(self):
+        if np.ndim(self.mat) == 2:
+            if not COLUMN_FIRST:
+                return np.shape(self.mat)[1]
+        return np.shape(self.mat)[0]
+    def view_traces(self, from_trace, to_trace, nsamples):
+        if np.ndim(self.mat) == 2:
+            if COLUMN_FIRST:
+                A = self.mat[:,from_trace:to_trace]
+                B = np.transpose(A)
+                return B
+            else:
+                return self.mat[from_trace:to_trace,:]
+        else:
+            return [self.mat[:]]
+    def close(self):
+        pass
+
+class PlotWindow(QtGui.QMainWindow):
+    def __init__(self, plotters=[], parent=None):
+        super(PlotWindow, self).__init__(parent)
+        self.vertlayout = QtGui.QVBoxLayout()
+        for plotter in plotters:
+            self.vertlayout.addWidget(plotter)
+        w = QtGui.QWidget()
+        w.setLayout(self.vertlayout)
+        self.setCentralWidget(w)
+class XPlotCurveItem(PlotCurveItem.PlotCurveItem):
+    def __init__(self, *args, **kargs):
+        self.id = kargs['itemId']
+        super().__init__(*args, **kargs)
+    def paint(self, p, opt, widget):
+        #p.setCompositionMode(QtGui.QPainter.CompositionMode_Multiply)
+        super().paint(p, opt, widget)
+    def get_id(self):
+        return self.id
+class XPlotItem(PlotItem.PlotItem):
+    def __init__(self, *args, **kargs):
+        super().__init__(*args, **kargs)
+class GlobalScroller:
+    def __init__(self):
+        self.objs = []
+    def add_self(self, sself):
+        self.objs.append(sself)
+    def update(self, value, sself):
+        for obj in self.objs:
+            if obj != sself:
+                obj.update_traces_and_scrollbar(value)
+class Plotter(QtGui.QWidget):
+    def __init__(self, view, title, globalscroller, parent=None):
+        self.view = view
+        self.init_done = False
+        super(Plotter, self).__init__(parent)
+        self.win = pg.GraphicsLayoutWidget()
+             
+        # Enable antialiasing for prettier plots
+        pg.setConfigOptions(antialias=True)
+        self.nTraces = view.get_ntraces()
+        self.nSamples = view.get_nsamples()
+        self.nViewTraces = NVIEW_TRACES
+
+        print(self.nTraces, self.nSamples, self.nViewTraces)
+
+        self.randompens = PENS
+        self.globalscroller = globalscroller
+        if globalscroller:        
+            globalscroller.add_self(self)
+
+        if NVIEW_RANGE == (0,0):
+            traces = self.view_traces(0, self.nViewTraces, self.nSamples)
+        else:
+            #fixme: get nSamples working, this is a hack
+            print(NVIEW_RANGE)
+            slic = np.s_[:,NVIEW_RANGE[0]:NVIEW_RANGE[1]]
+            traces = self.view_traces(0, self.nViewTraces, self.nSamples)
+            if len(traces) == 1:
+                traces = [traces[0][NVIEW_RANGE[0]:NVIEW_RANGE[1]]]
+
+        self.plotitem = XPlotItem(title="")
+
+        self.plotitem.sigXRangeChanged.connect(self.on_xrange_changed)
+        self.win.addItem(self.plotitem, None, None, 1, 1)
+        self.plotitem.setClipToView(True)
+
+        self.curveitems = [None] * self.nViewTraces
+        if BASE_TRACE != None:
+            base_curve = XPlotCurveItem(traces[BASE_TRACE], pen=PEN_GREY, itemId=-1,
+                    antialias=False, autoDownsample=True)
+            self.plotitem.addItem(base_curve)
+            base_curve.getViewBox().disableAutoRange()
+
+        i=0
+        for trace in traces:
+            self.curveitems[i] = XPlotCurveItem(trace, pen=self.randompens[i], itemId=i, 
+                    antialias=False, autoDownsample=True, downsampleMethod='peak', downsample=1000)
+            self.plotitem.addItem(self.curveitems[i], params={})
+            self.curveitems[i].setClickable(True)
+            self.curveitems[i].getViewBox().enableAutoRange(axis='y')
+            self.curveitems[i].getViewBox().setAutoVisible(y=True)
+
+            self.curveitems[i].sigClicked.connect(self.on_plot_clicked)
+            i += 1
+        
+        self.current_xrange = tuple(self.plotitem.getViewBox().viewRange()[0])
+        self.trace_offsets = [0] * self.nTraces
+        if OFFSETS != None:
+            trace_offsets = np.load(OFFSETS)
+            if np.shape(trace_offsets)[0] == self.nTraces:
+                self.trace_offsets = trace_offsets
+            else:
+                print('offsets length differ to plot item count')
+
+        for inf_line in INF_LINES:
+            self.plotitem.addLine(y=inf_line,pen=INF_PEN,movable=True)
+
+        self.idxs = np.empty((len(traces[0])), dtype=np.uint32)
+        for idx in range(0, len(traces[0])):
+            self.idxs[idx] = idx
+
+        self.selected_item = None
+        self.shift_pressed = False
+        
+        self.vertlayout = QtGui.QVBoxLayout(self)
+        self.vertlayout.setContentsMargins(0, 0, 0, 0)
+        self.hbox_cntl = QtGui.QHBoxLayout()
+        self.hbox_cntl.setContentsMargins(0, 0, 0, 0)
+        
+        self.dsp_progress = QtGui.QLabel('')
+        self.dsp_progress.setMinimumWidth(50)
+        self.dsp_progress.setSizePolicy(QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed,QtGui.QSizePolicy.Fixed))
+        
+        self.cb_datalines = QtGui.QComboBox()
+        self.cb_datalines.setFont(QtGui.QFont('Monospace',10))
+        self.scroll_traces = QtGui.QScrollBar(orientation=QtCore.Qt.Horizontal)
+        #self.scroll_traces.actionTriggered.connect(self.on_scroll_action_triggered)
+        #self.scroll_traces.sliderReleased.connect(self.on_scroll_released)
+        self.scroll_traces.setTracking(False)
+        self.scroll_traces.valueChanged.connect(self.on_scroll_traces)
+        self.scroll_traces.setMaximum(self.nTraces-self.nViewTraces)
+        self.scroll_traces.setMinimum(0)
+        
+        self.vertlayout.addWidget(self.cb_datalines)
+        self.hbox_cntl.addWidget(self.scroll_traces)
+        self.hbox_cntl.addWidget(self.dsp_progress, False)
+        
+        vv = self.layout()
+        vv.addWidget(self.win)
+        vv.addLayout(self.hbox_cntl)
+        self.init_done = True
+    def on_xrange_changed(self, vb, xrange):
+        if not self.init_done:
+            return
+        if self.current_xrange[0] > xrange[0] and xrange[1] > self.current_xrange[1]:
+            # redraw zoomout
+            self.update_traces(self.scroll_traces.value())
+        self.current_xrange = xrange
+    def on_plot_clicked(self, item):
+        self.selected_item = item
+        self.selected_item_id = item.get_id()
+        
+        R = QtGui.QPen(self.randompens[item.get_id()])
+        C = QtGui.QColor(R.color())
+        R.setColor(C.darker())
+        for i in range(0,len(self.curveitems)):
+            if self.curveitems[i]:
+                self.curveitems[i].setPen(self.randompens[i])
+
+        self.curveitems[item.get_id()].setPen(R)
+    def on_scroll_traces(self, value):
+        if not self.init_done:
+            return
+        self.update_progress(value)
+        self.update_traces(value)
+        if self.globalscroller:
+            self.globalscroller.update(value, self)
+    def update_traces_and_scrollbar(self, value):
+        self.update_traces(value)
+        self.scroll_traces.setValue(value)
+    def view_traces(self, start, end, nsamples):
+        if PLOT_ABS:
+            return np.abs( self.view.view_traces(start, end, nsamples) )
+        else:
+            return self.view.view_traces(start, end, nsamples)
+    def view_data(self, start, end):
+        return self.view.view_data(start, end)
+    def update_traces(self, value):
+        win = self.win
+        traces = []
+        data = []
+        if NVIEW_RANGE == (0,0):
+            traces = self.view_traces(value, value + self.nViewTraces, self.nSamples)
+            data = self.view_data(value, value + self.nViewTraces)
+        else:
+            traces = self.view_traces(value, value + self.nViewTraces, NVIEW_RANGE)[::,NVIEW_RANGE[0]::NVIEW_RANGE[1]]
+            data = self.view_data(value, value + self.nViewTraces)
+        i = 0
+        L = len(traces[0])
+
+        self.cb_datalines.clear()
+        for trace in traces:
+            viewrange = self.curveitems[i].getViewBox().viewRange()
+            xmin = viewrange[0][0]
+            xmin = int(xmin)
+            xmax = viewrange[0][1]
+            xmax = int(xmax)
+            self.curveitems[i].setData(self.idxs[max(xmin,0):min(L,xmax)],trace[max(xmin,0):min(L,xmax)], pen=self.randompens[i])
+            if data != []:
+                self.cb_datalines.addItem(data[i])
+            #self.curveitems[i].getViewBox().enableAutoRange(axis='y')
+            #self.curveitems[i].getViewBox().setAutoVisible(y=True)
+
+
+            offset = self.trace_offsets[value + i]
+            #offset = (offset / range_diff(self.current_xrange)) * self.plotitem.getViewBox().viewPixelSize()[0]
+
+            pos=QtCore.QPoint(offset,0)
+            self.curveitems[i].setPos(pos)
+            i += 1
+        self.update_progress(value)
+    def update_progress(self, value): 
+        self.dsp_progress.setText(str(value)+"-"+str(value+self.nViewTraces-1))
+    def move_selected_plot(self, amount):
+        if self.selected_item:
+            g=self.selected_item.pos()
+            x = g.x() + amount
+            y = g.y()
+            self.selected_item.setPos(QtCore.QPointF(x,y))
+            #self.trace_offsets[self.scroll_traces.value() + self.selected_item_id] = \
+            #    self.selected_item.pos().x() / self.plotitem.getViewBox().viewPixelSize()[0] * range_diff(self.current_xrange)
+
+            self.trace_offsets[self.scroll_traces.value() + self.selected_item_id] = self.selected_item.pos().x()
+    def dump_offsets(self):
+        #D = (np.asarray(self.trace_offsets) / range_diff(self.current_xrange) ) * self.plotitem.getViewBox().viewPixelSize()[0] 
+        D = np.asarray(self.trace_offsets)
+        np.save('offsetdump.npy', D, allow_pickle=False)
+        print('offsets dumped')
+    def get_zoom_ratio(self):
+        vr = self.selected_item.getViewBox().viewRange()
+        r = abs(vr[0][1] - vr[0][0])
+        return r/self.view.get_nsamples()
+    def keyPressEvent(self, event):
+        posamp = 0
+        if self.shift_pressed:
+            posamp = 100
+        if event.key() == QtCore.Qt.Key_Escape:
+            exit(0)
+        elif event.key() == QtCore.Qt.Key_Left:
+            r = self.get_zoom_ratio()
+            self.move_selected_plot(-10*r - posamp)
+        elif event.key() == QtCore.Qt.Key_Right:
+            r = self.get_zoom_ratio()
+            self.move_selected_plot(10*r + posamp)
+        elif event.key() == QtCore.Qt.Key_Shift:
+            self.shift_pressed = True
+        elif event.key() == QtCore.Qt.Key_J:
+            self.scroll_traces.triggerAction(QtWidgets.QAbstractSlider.SliderSingleStepSub)
+        elif event.key() == QtCore.Qt.Key_L:
+            self.scroll_traces.triggerAction(QtWidgets.QAbstractSlider.SliderSingleStepAdd)
+        elif event.key() == QtCore.Qt.Key_D:
+            self.dump_offsets()
+    def keyReleaseEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Shift:
+            self.shift_pressed = False
+def get_highlighted_pens():
+    pens = []
+    for i in range(0, NVIEW_TRACES-1):
+        pens.append(pg.mkPen(color='AAAAAA'))
+    pens.append(pg.mkPen(color='0000FF'))
+    return pens
+
+def get_random_pens():
+    pens = []
+    for c in range(0, NVIEW_TRACES):
+        randcol1 = format(np.random.randint(0x00222222, 0x005FFFFF), '0>6X')
+        pen1 = pg.mkPen(color=randcol1,width=1)
+        pens.append(pen1)
+    return pens
+ARGS = set(['-l','-b','-w','-r','-o','-a','--help','--lock','--offsets','--base','--abs','--inf-lines'])
+if __name__ == '__main__':
+    plotters = []
+    viewers = []
+    globalscroller = None
+    args = sys.argv[1:]
+    #PENS = get_random_pens()
+    #PENS = get_highlighted_pens()
+    PEN_GREY = pg.mkPen(color='333333', width=1)
+    iarg = 0
+    while iarg < len(args):
+        if args[iarg] in ARGS:
+            if args[iarg] == '-l' or args[iarg] == '--lock':
+                globalscroller = GlobalScroller()
+            elif args[iarg] == '--help':
+                print("-l,--lock scroll lock views")
+                print("-w N view width (N)")
+                print("-r R1,R2 view only range (R1,R2)")
+                exit(0)
+            elif args[iarg] == '-w':
+                NVIEW_TRACES = int(args[iarg+1])
+                #PENS = get_random_pens()
+                print(NVIEW_TRACES)
+                iarg+=1
+            elif args[iarg] == '-a' or args[iarg] == '--abs':
+                PLOT_ABS = True
+            elif args[iarg] == '--inf-lines':
+                INF_LINES = tuple(float(x) for x in args[iarg+1].split(','))
+                print("inf lines:", INF_LINES)
+                iarg+=1
+            elif args[iarg] == '-r':
+                NVIEW_RANGE = tuple(int(x) for x in args[iarg+1].split(','))
+                print("use range:", NVIEW_RANGE)
+                iarg+=1
+            elif args[iarg] == '--offsets' or args[iarg] == '-o':
+                OFFSETS = args[iarg+1]
+                print('offsets loaded')
+                iarg+=1
+            elif args[iarg] == '--base':
+                BASE_TRACE = int(args[iarg+1])
+                iarg+=1
+        else:
+            break
+        iarg+=1
+    PENS = get_highlighted_pens()
+    args = args[iarg:]
+    for arg in args:
+        view = None
+        if arg.endswith("trs"):
+            view = TrsView()
+        elif arg.endswith("npy"):
+            view = NpyView()
+        elif arg.endswith("xrc"):
+            view = XrcView()
+        elif arg.endswith("txt") or arg.endswith("trc"):
+            view = TxtView()
+        else:
+            print("Unsupported file, defauling to txt")
+            view = TxtView()
+        view.open(arg)
+        viewers.append(view)
+
+    for view in viewers:
+        plotters.append(Plotter(view, arg, globalscroller))
+
+    main = PlotWindow(plotters=plotters)
+    main.resize(DEF_WIDTH, DEF_HEIGHT)
+    main.show()
+    app.exec_()
