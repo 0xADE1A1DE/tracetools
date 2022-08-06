@@ -32,7 +32,7 @@ public:
     ~corr_analysis_t();
 private:
     void calc_output(uint32_t outputtraces, trace_t* trace, 
-            uint32_t guessidx, double* maxcorrelation);
-    
+            uint32_t model_dist_idx, double* maxcorrelation);
+    void read_stdin(std::vector<float>& modelvals);
     PImpl<corr_analysis_priv_t> pimpl;
 };

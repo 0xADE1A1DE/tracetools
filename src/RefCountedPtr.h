@@ -93,7 +93,7 @@ public:
         PWASSERT(_refcountptr != nullptr, "");
         return _ptr;
     }
-    T& operator[](size_t index) 
+    inline T& operator[](size_t index) 
     {
         PWASSERT(_refcountptr != nullptr, "");
 #ifdef DEBUG
@@ -101,7 +101,7 @@ public:
 #endif
         return _ptr[index];
     }
-    const T& operator[](size_t index) const
+    inline const T& operator[](size_t index) const
     {
         PWASSERT(_refcountptr != nullptr, "");
 #ifdef DEBUG

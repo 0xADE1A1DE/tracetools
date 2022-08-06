@@ -1,6 +1,6 @@
 INCL=-I../include -I../src -I../thirdparty/ -I/usr/local/opt/boost/include/
 #FLAGS=-g -Wall -O0 -fsanitize=address -fno-inline-functions -fPIC -D_GLIBCXX_DEBUG -DDEBUG
-FLAGS=-g -Wall -O2 -fPIC -mavx 
+FLAGS=-g -Wall -Ofast -fPIC -mavx  
 #FLAGS=-g -Wall -O0  -fno-inline-functions -fPIC -DDEBUG -D_GLIBCXX_DEBUG
 ifdef PARALLEL
 FLAGS+=-fopenmp -DPARALLEL
@@ -8,12 +8,12 @@ endif
 CXXFLAGS=$(FLAGS) -std=c++11 
 CFLAGS=$(FLAGS)
 IIR_INC=-I../thirdparty/iir1/base/include
-IIR_LIB=-L../thirdparty/iir1/base/lib -liir_static
+IIR_LIB=-L../thirdparty/iir1/base/lib -L../thirdparty/iir1/base/lib64 -liir_static
 LIBNAME_BASE=pwmodel
 LIBS=-L. -l$(LIBNAME_BASE) -lpthread -ldl -lboost_filesystem -lfftw3 $(IIR_LIB)
 INCL:=$(INCL) $(IIR_INC)
 SRC_C_FILES=$(wildcard *.c) $(wildcard ../thirdparty/*/*.c)
-SRC_CXX_FILES=$(wildcard *.cpp) $(wildcard ../thirdparty/*/*.cpp)
+SRC_CXX_FILES=$(wildcard *.cpp) $(wildcard ../thirdparty/*/*.cpp) $(wildcard ./leakage_models/*.cpp)
 OBJ_C_FILES=$(patsubst %.c,%.o, $(SRC_C_FILES))
 OBJ_CXX_FILES=$(patsubst %.cpp,%.o, $(SRC_CXX_FILES))
 

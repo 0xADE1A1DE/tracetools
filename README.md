@@ -19,18 +19,21 @@ TraceTools is a set of tools for power trace analysis.
 
 ##### TraceTools
 Before building TraceTools, install the dependencies by running the following command (only in Debian like systems, 
-you may have to find correct pacakage names for other distributions). 
-TraceTools have only been tested on Ubuntu but will work on 
-other systems with minimal changes.
+you may have to find correct package names for other distributions). 
 
-	sudo apt install libboost-filesystem-dev libboost-math-dev libfftw3-dev cmake
+TraceTools have only been tested on Ubuntu but will work on other systems with minimal changes.
+
+	sudo apt install libboost-filesystem-dev libboost-math-dev libfftw3-dev libeigen3-dev cmake
 
 Build the thirdparty `iir1` library by running the following commands,
 
+	git submodule update --init --recursive
 	cd thirdparty/iir1
 	mkdir base 
 	mkdir build
+	cd build
 	cmake .. -DCMAKE_INSTALL_PREFIX=<path_to_trace_tools>/thirdparty/iir1/base
+	make install
 
 Build TraceTools by running `make` in `./src` directory. You may optionally
 use `PARALLEL=1` to enable OpenMP based parallelism. 

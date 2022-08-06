@@ -42,10 +42,10 @@ int traceutils_groups_count()
         if (wc_gopts_has("data_groups_count"))
         {
             __pwtraceutils_data_groups = wc_gopts_get("data_groups_count").get_int();
-            if (__pwtraceutils_data_groups == 0)
+            /*if (__pwtraceutils_data_groups == 0)
             {
                 LogErrDie("Group count must be non zero\n");
-            }
+            }*/
         }
         else
         {

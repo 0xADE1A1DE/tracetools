@@ -41,6 +41,7 @@ enum Arguments
     ARG_LIBNAME,
     ARG_GUESS_COUNT,
     ARG_GROUPS,
+    ARG_ATTACK_MODEL,
     ARG_FILT_TYPE,
     ARG_FILT_SMPLR,
     ARG_FILT_CUTOFF,
@@ -70,6 +71,7 @@ pwargs_t args[] =
     { "--libname", "-l", -1, 1 },
     { "--guess-count", "-u", -1, 1 },
     { "--groups", "-g", -1, 1 },
+    { "--attack-model", "-m", -1, 1 },
     { "--filter-type", "", -1, 1 },
     { "--filter-samplerate", "", -1, 1 },
     { "--filter-cutoff", "", -1, 1 },
@@ -103,6 +105,8 @@ const char* longdescs[] =
     "Guess count, [1, 256]",
     "Number of trace groups (default is 2), when larger than 0\n"
         "\tthe group count is the first byte of data, [1, 256]",
+    "\%'corr' Command",
+    "The model used for the CPA attack [aes]",
     "\%'filter' Command",
     "Filter type [lowpass, highpass, bandstop]",
     "Filter samplerate in Hz",
@@ -192,6 +196,10 @@ int main(int argc, char *argv[])
     {
         opts_map.insert({"corr_guess_count", atoi(argv[ARGS_IDX(ARG_GUESS_COUNT)])});
     }
+    if (ARGS_IDX(ARG_ATTACK_MODEL) != -1) 
+    {
+        opts_map.insert({"corr_model", argv[ARGS_IDX(ARG_ATTACK_MODEL)]});
+    }
     if (ARGS_IDX(ARG_FILT_TYPE) != -1)
     {
         opts_map.insert({"filter_select", argv[ARGS_IDX(ARG_FILT_TYPE)]});
@@ -259,6 +267,7 @@ int main(int argc, char *argv[])
     {
         opts_map.insert({"chisq_trace_div", (double) atof(argv[ARGS_IDX(ARG_CSQ_DIV)])});
     }
+    
     wc_gopts_merge(opts_map);
     pwpass_update_properties();
     pwlog_set_verbosity(0);
